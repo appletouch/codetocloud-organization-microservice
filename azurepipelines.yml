@@ -1,0 +1,58 @@
+trigger:
+- development
+resources:
+  containers:
+  - container: mavenbuildserver
+    image: jilsanregistries.azurecr.io/jilsan-maven-builder:maven-3.6.0-jdk-8
+    endpoint: acr
+  - container: dockerbuildserver
+    image: jilsanregistries.azurecr.io/jilsan-springboot-image-builder:1.0.0
+    endpoint: acr
+variables:
+  path_to_artifacts: $(System.ArtifactsDirectory)/organizationapi
+  artifact_name: organizationapi-0.0.1-SNAPSHOT.jar
+  app_name: organizationapi
+  docker-repository: jilsanregistries.azurecr.io/fastexpenses 
+  app_folder: /app
+  app_classname: com.jilsan.expenses.organizationapi.OrganizationapiApplication 
+jobs: 
+  - job: BuildOrganizationAPI
+    pool:
+        name: Hosted Ubuntu 1604
+    container : mavenbuildserver
+    steps:
+          - script: mvn clean package -f organizationapi/pom.xml 
+            displayName: mvn build
+          - script: cp organizationapi/target/or*.jar $(Build.ArtifactStagingDirectory)
+            displayName: Copy To Artifact Staging
+          - script: sed -i "s/<<BuildNumber>>/$(Build.BuildNumber)/g" kube.yaml
+            displayName: Replace BuildNumber in Kubernetes manifest
+          - script: cp kube.yaml $(Build.ArtifactStagingDirectory)
+            displayName: Copy To  Kubernetes manifest to artifact staging
+ 
+          - task: PublishBuildArtifacts@1
+            inputs:
+              pathtoPublish: $(Build.ArtifactStagingDirectory)
+              artifactName: organizationapi
+            displayName: Publish as Artifact
+            
+  - job: BuildOrganizationAPIDocker
+    pool:
+        name: Hosted Ubuntu 1604
+    container : dockerbuildserver
+    steps:
+          - task: DownloadBuildArtifacts@0
+            inputs:
+              downloadPath: '$(System.ArtifactsDirectory)' 
+              artifactName: organizationapi
+            displayName: download artifact  
+          - script: build  
+            displayName: Build Docker Container 
+          - script: docker login jilsanregistries.azurecr.io -u $(acrusername) -p $(acrpassword)
+            displayName: Registry Login
+          - script: docker tag $(app_name):$(Build.BuildNumber) $(docker-repository)/$(app_name):$(Build.BuildNumber)
+            displayName: Tag Image
+          - script: docker push $(docker-repository)/$(app_name):$(Build.BuildNumber)
+            displayName: Tag Image
+    dependsOn: BuildOrganizationAPI
+    condition: succeeded()
